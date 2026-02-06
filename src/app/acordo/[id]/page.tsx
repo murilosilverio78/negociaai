@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
-import { supabase, Acordo, Parcela } from "@/lib/supabase";
+import { Acordo, Parcela } from "@/lib/supabase";
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("pt-BR", {
@@ -42,29 +42,17 @@ export default function AcordoPage() {
 
     async function fetchAcordo() {
       try {
-        const { data: acordoData, error: acordoError } = await supabase
-          .from("acordos")
-          .select("*")
-          .eq("id", id)
-          .single();
+        const res = await fetch(`/api/public/acordo?id=${id}`);
+        const data = await res.json();
 
-        if (acordoError || !acordoData) {
-          console.error("Acordo não encontrado:", acordoError);
+        if (!res.ok || !data.acordo) {
+          console.error("Acordo não encontrado");
           router.push("/");
           return;
         }
 
-        setAcordo(acordoData);
-
-        const { data: parcelasData, error: parcelasError } = await supabase
-          .from("parcelas")
-          .select("*")
-          .eq("acordo_id", id)
-          .order("numero", { ascending: true });
-
-        if (!parcelasError && parcelasData) {
-          setParcelas(parcelasData);
-        }
+        setAcordo(data.acordo);
+        setParcelas(data.parcelas || []);
       } catch (err) {
         console.error("Erro ao buscar acordo:", err);
         router.push("/");

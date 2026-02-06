@@ -18,6 +18,9 @@ export interface Credor {
   nome: string;
   cnpj: string;
   email: string;
+  user_id?: string;
+  webhook_config?: Record<string, unknown>;
+  config_negociacao?: Record<string, unknown>;
 }
 
 export interface Divida {

@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
-import { supabase, Divida, Mensagem } from "@/lib/supabase";
+import { Divida, Mensagem } from "@/lib/supabase";
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("pt-BR", {
@@ -39,6 +39,7 @@ export default function NegociarPage() {
   const [negociacaoId, setNegociacaoId] = useState<string | null>(null);
   const [opcaoEscolhida, setOpcaoEscolhida] = useState<OpcaoAcordo | null>(null);
   const [mostrarBotaoFechar, setMostrarBotaoFechar] = useState(false);
+  const [isClosingDeal, setIsClosingDeal] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -81,7 +82,7 @@ export default function NegociarPage() {
     ];
   };
 
-  const adicionarMensagem = (remetente: "usuario" | "bot", conteudo: string) => {
+  const adicionarMensagem = useCallback((remetente: "usuario" | "bot", conteudo: string) => {
     const novaMensagem: Mensagem = {
       id: Date.now().toString(),
       remetente,
@@ -90,41 +91,22 @@ export default function NegociarPage() {
     };
     setMensagens((prev) => [...prev, novaMensagem]);
     return novaMensagem;
-  };
+  }, []);
 
-  const atualizarNegociacao = async (negId: string, campos: Record<string, unknown>) => {
+  const iniciarNegociacao = useCallback(async (dividaData: Divida) => {
+    // Criar registro de negociação via API server-side
     try {
-      const { error } = await supabase
-        .from("negociacoes")
-        .update(campos)
-        .eq("id", negId);
-
-      if (error) {
-        console.warn("Aviso ao atualizar negociação:", error.message);
+      const res = await fetch("/api/public/negociacao", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ divida_id: dividaData.id }),
+      });
+      const data = await res.json();
+      if (res.ok && data.negociacao) {
+        setNegociacaoId(data.negociacao.id);
       }
-    } catch (error) {
-      console.warn("Aviso ao atualizar negociação:", error);
-    }
-  };
-
-  const iniciarNegociacao = async (dividaData: Divida) => {
-    // Criar registro de negociação no Supabase (apenas colunas essenciais)
-    const { data: negociacao, error } = await supabase
-      .from("negociacoes")
-      .insert({
-        divida_id: dividaData.id,
-        status: "em_andamento",
-      })
-      .select()
-      .single();
-
-    if (error) {
-      console.error("Erro ao criar negociação:", error);
-      // Mesmo sem registro no banco, permitir o chat funcionar localmente
-    }
-
-    if (negociacao) {
-      setNegociacaoId(negociacao.id);
+    } catch {
+      console.warn("Aviso: não foi possível criar negociação no servidor");
     }
 
     // Mensagem de boas-vindas
@@ -143,7 +125,7 @@ export default function NegociarPage() {
     };
 
     setMensagens([bemVindo, opcoesMensagem]);
-  };
+  }, []);
 
   useEffect(() => {
     if (!id) {
@@ -153,25 +135,17 @@ export default function NegociarPage() {
 
     async function fetchDivida() {
       try {
-        const { data, error } = await supabase
-          .from("dividas")
-          .select(`
-            *,
-            credor:credores(id, nome, cnpj, email)
-          `)
-          .eq("id", id)
-          .single();
+        const res = await fetch(`/api/public/divida/${id}`);
+        const json = await res.json();
 
-        if (error || !data) {
-          console.error("Dívida não encontrada:", error);
+        if (!res.ok || !json.divida) {
           router.push("/consulta");
           return;
         }
 
-        setDivida(data);
-        await iniciarNegociacao(data);
-      } catch (err) {
-        console.error("Erro ao buscar dívida:", err);
+        setDivida(json.divida);
+        await iniciarNegociacao(json.divida);
+      } catch {
         router.push("/consulta");
       } finally {
         setIsLoading(false);
@@ -179,7 +153,7 @@ export default function NegociarPage() {
     }
 
     fetchDivida();
-  }, [id, router]);
+  }, [id, router, iniciarNegociacao]);
 
   const processarResposta = async (mensagemUsuario: string) => {
     if (!divida) return;
@@ -190,7 +164,6 @@ export default function NegociarPage() {
     let respostaBot = "";
     let opcaoSelecionada: OpcaoAcordo | null = null;
 
-    // Verificar se usuário escolheu uma opção
     if (msgLower === "1" || msgLower.includes("vista") || msgLower.includes("à vista")) {
       opcaoSelecionada = opcoes[0];
       respostaBot = `Excelente escolha! Você optou pelo pagamento **à vista** com 40% de desconto.\n\n💰 **Valor: ${formatCurrency(opcaoSelecionada.valorTotal)}**\n\nEssa é a melhor economia! Você está pronto para fechar o acordo?`;
@@ -220,9 +193,7 @@ export default function NegociarPage() {
       setMostrarBotaoFechar(true);
     }
 
-    // Simular delay de resposta
     await new Promise((resolve) => setTimeout(resolve, 1000));
-
     adicionarMensagem("bot", respostaBot);
   };
 
@@ -246,34 +217,34 @@ export default function NegociarPage() {
   };
 
   const fecharAcordo = async () => {
-    if (!opcaoEscolhida || !divida) return;
+    if (!opcaoEscolhida || !divida || isClosingDeal) return;
+
+    setIsClosingDeal(true);
 
     try {
-      // Se não temos negociacaoId (insert inicial falhou), criar agora
+      // Se não temos negociacaoId, criar agora
       let negId = negociacaoId;
       if (!negId) {
-        const { data: negociacao, error: negError } = await supabase
-          .from("negociacoes")
-          .insert({
-            divida_id: divida.id,
-            status: "em_andamento",
-          })
-          .select()
-          .single();
-
-        if (negError || !negociacao) {
-          console.error("Erro ao criar negociação:", negError);
+        const negRes = await fetch("/api/public/negociacao", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ divida_id: divida.id }),
+        });
+        const negData = await negRes.json();
+        if (!negRes.ok || !negData.negociacao) {
           adicionarMensagem("bot", "Erro ao processar o acordo. Tente novamente.");
+          setIsClosingDeal(false);
           return;
         }
-        negId = negociacao.id;
+        negId = negData.negociacao.id;
         setNegociacaoId(negId);
       }
 
-      // 1. Salvar acordo na tabela "acordos"
-      const { data: acordo, error: acordoError } = await supabase
-        .from("acordos")
-        .insert({
+      // Criar acordo via API server-side
+      const res = await fetch("/api/public/acordo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           divida_id: divida.id,
           negociacao_id: negId,
           valor_original: divida.valor_atualizado,
@@ -282,59 +253,27 @@ export default function NegociarPage() {
           numero_parcelas: opcaoEscolhida.parcelas,
           valor_parcela: opcaoEscolhida.valorParcela,
           opcao_escolhida: opcaoEscolhida.id,
-          status: "ativo",
-        })
-        .select()
-        .single();
+        }),
+      });
 
-      if (acordoError || !acordo) {
-        console.error("Erro ao criar acordo:", acordoError);
+      const data = await res.json();
+
+      if (!res.ok || !data.acordo) {
+        console.error("Erro ao fechar acordo:", data.error);
         adicionarMensagem("bot", "Erro ao criar o acordo. Tente novamente.");
+        setIsClosingDeal(false);
         return;
       }
 
-      // 2. Gerar e salvar parcelas
-      const parcelas = [];
-      const hoje = new Date();
-      for (let i = 0; i < opcaoEscolhida.parcelas; i++) {
-        const dataVencimento = new Date(hoje);
-        dataVencimento.setDate(dataVencimento.getDate() + 10 + i * 30);
-        parcelas.push({
-          acordo_id: acordo.id,
-          numero: i + 1,
-          valor: opcaoEscolhida.valorParcela,
-          data_vencimento: dataVencimento.toISOString().split("T")[0],
-          status: "pendente",
-        });
-      }
-
-      const { error: parcelasError } = await supabase.from("parcelas").insert(parcelas);
-      if (parcelasError) {
-        console.error("Erro ao criar parcelas:", parcelasError);
-      }
-
-      // 3. Atualizar status da negociação
-      await atualizarNegociacao(negId!, {
-        status: "acordo_fechado",
-        opcao_escolhida: opcaoEscolhida.id,
-        valor_acordo: opcaoEscolhida.valorTotal,
-      });
-
-      // 4. Atualizar status da dívida para "acordo"
-      await supabase
-        .from("dividas")
-        .update({ status: "acordo" })
-        .eq("id", id);
-
-      // 5. Mensagem final e redirecionar
       adicionarMensagem("bot", "Acordo fechado com sucesso! Redirecionando...");
 
       setTimeout(() => {
-        router.push(`/acordo/${acordo.id}`);
+        router.push(`/acordo/${data.acordo.id}`);
       }, 1500);
     } catch (error) {
       console.error("Erro ao fechar acordo:", error);
       adicionarMensagem("bot", "Ocorreu um erro ao fechar o acordo. Tente novamente.");
+      setIsClosingDeal(false);
     }
   };
 
@@ -439,9 +378,11 @@ export default function NegociarPage() {
                     className="w-full bg-green-600 hover:bg-green-700"
                     size="lg"
                     onClick={fecharAcordo}
+                    disabled={isClosingDeal}
                   >
-                    Fechar Acordo - {formatCurrency(opcaoEscolhida.valorTotal)}
-                    {opcaoEscolhida.parcelas > 1 && ` (${opcaoEscolhida.parcelas}x)`}
+                    {isClosingDeal
+                      ? "Processando..."
+                      : `Fechar Acordo - ${formatCurrency(opcaoEscolhida.valorTotal)}${opcaoEscolhida.parcelas > 1 ? ` (${opcaoEscolhida.parcelas}x)` : ""}`}
                   </Button>
                 </div>
               )}
@@ -454,7 +395,7 @@ export default function NegociarPage() {
                     placeholder="Digite sua mensagem..."
                     value={inputMensagem}
                     onChange={(e) => setInputMensagem(e.target.value)}
-                    onKeyPress={handleKeyPress}
+                    onKeyDown={handleKeyPress}
                     disabled={isSending}
                     className="flex-1"
                   />

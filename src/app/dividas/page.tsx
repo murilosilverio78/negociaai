@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
-import { supabase, Divida } from "@/lib/supabase";
+import { Divida } from "@/lib/supabase";
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("pt-BR", {
@@ -40,35 +40,16 @@ function DividasContent() {
 
     async function fetchDividas() {
       try {
-        // Busca o devedor pelo CPF (CPF está com pontuação no banco)
-        const { data: devedor, error: devedorError } = await supabase
-          .from("devedores")
-          .select("id")
-          .eq("cpf", cpf)
-          .single();
+        const cpfDigits = cpf!.replace(/\D/g, "");
+        const res = await fetch(`/api/public/dividas?cpf=${cpfDigits}`);
+        const data = await res.json();
 
-        if (devedorError || !devedor) {
-          setDividas([]);
-          setIsLoading(false);
-          return;
+        if (!res.ok) {
+          throw new Error(data.error || "Erro ao buscar dívidas");
         }
 
-        // Busca as dívidas com join na tabela credores
-        const { data, error: queryError } = await supabase
-          .from("dividas")
-          .select(`
-            *,
-            credor:credores(id, nome, cnpj, email)
-          `)
-          .eq("devedor_id", devedor.id);
-
-        if (queryError) {
-          throw queryError;
-        }
-
-        setDividas(data || []);
-      } catch (err) {
-        console.error("Erro ao buscar dívidas:", err);
+        setDividas(data.dividas || []);
+      } catch {
         setError("Erro ao carregar as dívidas. Tente novamente.");
       } finally {
         setIsLoading(false);

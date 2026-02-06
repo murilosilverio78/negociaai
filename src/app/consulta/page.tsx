@@ -8,7 +8,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
-import { supabase } from "@/lib/supabase";
 
 function formatCPF(value: string): string {
   const numbers = value.replace(/\D/g, "");
@@ -71,35 +70,19 @@ export default function ConsultaPage() {
     setIsLoading(true);
 
     try {
-      // CPF no banco está salvo COM pontuação
-      const { data: devedor, error: devedorError } = await supabase
-        .from("devedores")
-        .select("id")
-        .eq("cpf", cpf)
-        .single();
+      const cpfDigits = cpf.replace(/\D/g, "");
+      const res = await fetch(`/api/public/dividas?cpf=${cpfDigits}`);
+      const data = await res.json();
 
-      if (devedorError || !devedor) {
-        setResult({
-          found: false,
-          message: "Nenhuma dívida encontrada para este CPF.",
-        });
-        return;
+      if (!res.ok) {
+        throw new Error(data.error || "Erro ao consultar");
       }
 
-      const { data: dividas, error: dividasError } = await supabase
-        .from("dividas")
-        .select("id")
-        .eq("devedor_id", devedor.id);
-
-      if (dividasError) {
-        throw dividasError;
-      }
-
-      if (dividas && dividas.length > 0) {
+      if (data.count > 0) {
         setResult({
           found: true,
-          message: `Encontramos ${dividas.length} dívida${dividas.length > 1 ? "s" : ""} disponíve${dividas.length > 1 ? "is" : "l"} para negociação!`,
-          count: dividas.length,
+          message: `Encontramos ${data.count} dívida${data.count > 1 ? "s" : ""} disponíve${data.count > 1 ? "is" : "l"} para negociação!`,
+          count: data.count,
         });
       } else {
         setResult({
@@ -107,8 +90,7 @@ export default function ConsultaPage() {
           message: "Nenhuma dívida encontrada para este CPF.",
         });
       }
-    } catch (err) {
-      console.error("Erro ao consultar:", err);
+    } catch {
       setError("Erro ao consultar. Tente novamente mais tarde.");
     } finally {
       setIsLoading(false);
@@ -116,8 +98,8 @@ export default function ConsultaPage() {
   };
 
   const handleVerOfertas = () => {
-    // Passa o CPF formatado (como está no banco)
-    router.push(`/dividas?cpf=${encodeURIComponent(cpf)}`);
+    const cpfDigits = cpf.replace(/\D/g, "");
+    router.push(`/dividas?cpf=${cpfDigits}`);
   };
 
   return (
