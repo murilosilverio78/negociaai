@@ -16,6 +16,42 @@ function formatCurrency(value: number): string {
   }).format(value);
 }
 
+interface ConfigNegociacao {
+  desconto_max_avista: number;
+  desconto_max_parcelado: number;
+  faixa_0_30: number;
+  faixa_31_90: number;
+  faixa_91_180: number;
+  faixa_180_plus: number;
+  max_parcelas: number;
+  valor_min_parcela: number;
+  entrada_minima: number;
+  parcelas_faixa_0_30: number;
+  parcelas_faixa_31_90: number;
+  parcelas_faixa_91_180: number;
+  parcelas_faixa_180_plus: number;
+  mensagem_boas_vindas: string;
+  nome_assistente: string;
+}
+
+const defaultConfig: ConfigNegociacao = {
+  desconto_max_avista: 30,
+  desconto_max_parcelado: 15,
+  faixa_0_30: 5,
+  faixa_31_90: 10,
+  faixa_91_180: 20,
+  faixa_180_plus: 30,
+  max_parcelas: 12,
+  valor_min_parcela: 50,
+  entrada_minima: 10,
+  parcelas_faixa_0_30: 3,
+  parcelas_faixa_31_90: 6,
+  parcelas_faixa_91_180: 9,
+  parcelas_faixa_180_plus: 12,
+  mensagem_boas_vindas: "Olá! Vamos negociar sua dívida?",
+  nome_assistente: "Assistente Negocia Aí",
+};
+
 interface OpcaoAcordo {
   id: string;
   titulo: string;
@@ -24,6 +60,94 @@ interface OpcaoAcordo {
   desconto: number;
   valorParcela: number;
   valorTotal: number;
+  entrada?: number;
+}
+
+function calcularDiasAtraso(dataVencimento: string): number {
+  const vencimento = new Date(dataVencimento);
+  const hoje = new Date();
+  const diffMs = hoje.getTime() - vencimento.getTime();
+  return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+}
+
+function getDescontoPorFaixa(diasAtraso: number, config: ConfigNegociacao): number {
+  if (diasAtraso <= 30) return config.faixa_0_30;
+  if (diasAtraso <= 90) return config.faixa_31_90;
+  if (diasAtraso <= 180) return config.faixa_91_180;
+  return config.faixa_180_plus;
+}
+
+function getMaxParcelasPorFaixa(diasAtraso: number, config: ConfigNegociacao): number {
+  if (diasAtraso <= 30) return config.parcelas_faixa_0_30;
+  if (diasAtraso <= 90) return config.parcelas_faixa_31_90;
+  if (diasAtraso <= 180) return config.parcelas_faixa_91_180;
+  return config.parcelas_faixa_180_plus;
+}
+
+function calcularOpcoesDinamicas(
+  valorAtualizado: number,
+  dataVencimento: string,
+  config: ConfigNegociacao
+): OpcaoAcordo[] {
+  const diasAtraso = calcularDiasAtraso(dataVencimento);
+  const descontoFaixa = getDescontoPorFaixa(diasAtraso, config);
+
+  // Desconto à vista: o menor entre desconto_max_avista e o desconto da faixa
+  const descontoAvista = Math.min(config.desconto_max_avista, descontoFaixa);
+  const valorAvista = valorAtualizado * (1 - descontoAvista / 100);
+
+  const opcoes: OpcaoAcordo[] = [
+    {
+      id: "avista",
+      titulo: "À Vista",
+      descricao: `Pagamento único com ${descontoAvista}% de desconto`,
+      parcelas: 1,
+      desconto: descontoAvista,
+      valorParcela: valorAvista,
+      valorTotal: valorAvista,
+    },
+  ];
+
+  // Calcular opções de parcelamento
+  const descontoParcelado = Math.min(config.desconto_max_parcelado, descontoFaixa);
+  const maxParcelas = getMaxParcelasPorFaixa(diasAtraso, config);
+  const entradaMinima = config.entrada_minima;
+  const valorMinParcela = config.valor_min_parcela;
+
+  // Gerar opção de parcelamento intermediário (metade das parcelas max)
+  const parcelasMetade = Math.max(2, Math.floor(maxParcelas / 2));
+  // Gerar opção de parcelamento máximo
+  const parcelasMax = Math.max(2, maxParcelas);
+
+  const opcoesParcelamento = [parcelasMetade, parcelasMax].filter(
+    (p, i, arr) => arr.indexOf(p) === i && p > 1
+  );
+
+  for (const numParcelas of opcoesParcelamento) {
+    const valorComDesconto = valorAtualizado * (1 - descontoParcelado / 100);
+    const entrada = valorComDesconto * (entradaMinima / 100);
+    const restante = valorComDesconto - entrada;
+    const parcelasRestantes = numParcelas - (entradaMinima > 0 ? 1 : 0);
+    const valorParcela = parcelasRestantes > 0 ? restante / parcelasRestantes : restante;
+
+    // Verificar se a parcela atende ao mínimo
+    if (valorParcela < valorMinParcela && numParcelas > 2) continue;
+
+    opcoes.push({
+      id: `${numParcelas}x`,
+      titulo: `Em ${numParcelas}x`,
+      descricao: entradaMinima > 0
+        ? `${numParcelas} parcelas com ${descontoParcelado}% de desconto (entrada de ${entradaMinima}%)`
+        : `${numParcelas} parcelas com ${descontoParcelado}% de desconto`,
+      parcelas: numParcelas,
+      desconto: descontoParcelado,
+      valorParcela,
+      valorTotal: valorComDesconto,
+      entrada: entradaMinima > 0 ? entrada : undefined,
+    });
+  }
+
+  return opcoes;
 }
 
 export default function NegociarPage() {
@@ -32,12 +156,14 @@ export default function NegociarPage() {
   const id = params.id as string;
 
   const [divida, setDivida] = useState<Divida | null>(null);
+  const [configCredor, setConfigCredor] = useState<ConfigNegociacao>(defaultConfig);
   const [mensagens, setMensagens] = useState<Mensagem[]>([]);
   const [inputMensagem, setInputMensagem] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [negociacaoId, setNegociacaoId] = useState<string | null>(null);
   const [opcaoEscolhida, setOpcaoEscolhida] = useState<OpcaoAcordo | null>(null);
+  const [opcoes, setOpcoes] = useState<OpcaoAcordo[]>([]);
   const [mostrarBotaoFechar, setMostrarBotaoFechar] = useState(false);
   const [isClosingDeal, setIsClosingDeal] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -50,38 +176,6 @@ export default function NegociarPage() {
     scrollToBottom();
   }, [mensagens]);
 
-  const calcularOpcoes = (valorAtualizado: number): OpcaoAcordo[] => {
-    return [
-      {
-        id: "avista",
-        titulo: "A Vista",
-        descricao: "Pagamento único com 40% de desconto",
-        parcelas: 1,
-        desconto: 40,
-        valorParcela: valorAtualizado * 0.6,
-        valorTotal: valorAtualizado * 0.6,
-      },
-      {
-        id: "6x",
-        titulo: "Em 6x",
-        descricao: "6 parcelas com 20% de desconto",
-        parcelas: 6,
-        desconto: 20,
-        valorParcela: (valorAtualizado * 0.8) / 6,
-        valorTotal: valorAtualizado * 0.8,
-      },
-      {
-        id: "12x",
-        titulo: "Em 12x",
-        descricao: "12 parcelas sem desconto",
-        parcelas: 12,
-        desconto: 0,
-        valorParcela: valorAtualizado / 12,
-        valorTotal: valorAtualizado,
-      },
-    ];
-  };
-
   const adicionarMensagem = useCallback((remetente: "usuario" | "bot", conteudo: string) => {
     const novaMensagem: Mensagem = {
       id: Date.now().toString(),
@@ -93,8 +187,19 @@ export default function NegociarPage() {
     return novaMensagem;
   }, []);
 
-  const iniciarNegociacao = useCallback(async (dividaData: Divida) => {
-    // Criar registro de negociação via API server-side
+  const formatarOpcaoTexto = (opcao: OpcaoAcordo, indice: number): string => {
+    const emoji = indice === 0 ? "1\uFE0F\u20E3" : indice === 1 ? "2\uFE0F\u20E3" : "3\uFE0F\u20E3";
+    if (opcao.parcelas === 1) {
+      return `${emoji} **${opcao.titulo}** - ${formatCurrency(opcao.valorTotal)} (${opcao.desconto}% de desconto!)`;
+    }
+    const entradaTexto = opcao.entrada
+      ? `\n   Entrada: ${formatCurrency(opcao.entrada)} + ${opcao.parcelas - 1}x de ${formatCurrency(opcao.valorParcela)}`
+      : `\n   ${opcao.parcelas}x de ${formatCurrency(opcao.valorParcela)}`;
+    return `${emoji} **${opcao.titulo}** - Total: ${formatCurrency(opcao.valorTotal)} (${opcao.desconto}% de desconto)${entradaTexto}`;
+  };
+
+  const iniciarNegociacao = useCallback(async (dividaData: Divida, config: ConfigNegociacao) => {
+    // Criar registro de negociacao via API server-side
     try {
       const res = await fetch("/api/public/negociacao", {
         method: "POST",
@@ -106,21 +211,36 @@ export default function NegociarPage() {
         setNegociacaoId(data.negociacao.id);
       }
     } catch {
-      console.warn("Aviso: não foi possível criar negociação no servidor");
+      console.warn("Aviso: nao foi possivel criar negociacao no servidor");
     }
+
+    // Calcular opcoes baseadas nas configuracoes do credor
+    const opcoesCalculadas = calcularOpcoesDinamicas(
+      dividaData.valor_atualizado,
+      dividaData.data_vencimento,
+      config
+    );
+    setOpcoes(opcoesCalculadas);
+
+    const nomeAssistente = config.nome_assistente || "Assistente Negocia Ai";
 
     // Mensagem de boas-vindas
     const bemVindo: Mensagem = {
       id: "1",
       remetente: "bot",
-      conteudo: `Olá! Sou o assistente de negociação do Negocia Aí. Vi que você tem uma dívida de ${formatCurrency(dividaData.valor_atualizado)} com ${dividaData.credor?.nome || "o credor"}. Como posso ajudá-lo hoje?`,
+      conteudo: config.mensagem_boas_vindas
+        ? `${config.mensagem_boas_vindas}\n\nVi que voce tem uma divida de ${formatCurrency(dividaData.valor_atualizado)} com ${dividaData.credor?.nome || "o credor"}.`
+        : `Ola! Sou o ${nomeAssistente}. Vi que voce tem uma divida de ${formatCurrency(dividaData.valor_atualizado)} com ${dividaData.credor?.nome || "o credor"}. Como posso ajuda-lo hoje?`,
       timestamp: new Date(),
     };
+
+    const diasAtraso = calcularDiasAtraso(dividaData.data_vencimento);
+    const listaOpcoes = opcoesCalculadas.map((op, i) => formatarOpcaoTexto(op, i)).join("\n\n");
 
     const opcoesMensagem: Mensagem = {
       id: "2",
       remetente: "bot",
-      conteudo: `Tenho ótimas opções de acordo para você:\n\n1️⃣ **À Vista** - ${formatCurrency(dividaData.valor_atualizado * 0.6)} (40% de desconto!)\n\n2️⃣ **6x de ${formatCurrency((dividaData.valor_atualizado * 0.8) / 6)}** - Total: ${formatCurrency(dividaData.valor_atualizado * 0.8)} (20% de desconto)\n\n3️⃣ **12x de ${formatCurrency(dividaData.valor_atualizado / 12)}** - Total: ${formatCurrency(dividaData.valor_atualizado)} (sem desconto)\n\nDigite o número da opção que deseja (1, 2 ou 3) ou me pergunte mais detalhes!`,
+      conteudo: `Tenho otimas opcoes de acordo para voce (divida com ${diasAtraso} dias de atraso):\n\n${listaOpcoes}\n\nDigite o numero da opcao que deseja (${opcoesCalculadas.map((_, i) => i + 1).join(", ")}) ou me pergunte mais detalhes!`,
       timestamp: new Date(),
     };
 
@@ -143,8 +263,15 @@ export default function NegociarPage() {
           return;
         }
 
-        setDivida(json.divida);
-        await iniciarNegociacao(json.divida);
+        const dividaData = json.divida as Divida;
+        setDivida(dividaData);
+
+        // Extrair config_negociacao do credor (vem junto com a divida)
+        const credorConfig = dividaData.credor?.config_negociacao as Partial<ConfigNegociacao> | undefined;
+        const config: ConfigNegociacao = { ...defaultConfig, ...(credorConfig || {}) };
+        setConfigCredor(config);
+
+        await iniciarNegociacao(dividaData, config);
       } catch {
         router.push("/consulta");
       } finally {
@@ -156,36 +283,71 @@ export default function NegociarPage() {
   }, [id, router, iniciarNegociacao]);
 
   const processarResposta = async (mensagemUsuario: string) => {
-    if (!divida) return;
+    if (!divida || opcoes.length === 0) return;
 
-    const opcoes = calcularOpcoes(divida.valor_atualizado);
     const msgLower = mensagemUsuario.toLowerCase().trim();
 
     let respostaBot = "";
     let opcaoSelecionada: OpcaoAcordo | null = null;
 
-    if (msgLower === "1" || msgLower.includes("vista") || msgLower.includes("à vista")) {
-      opcaoSelecionada = opcoes[0];
-      respostaBot = `Excelente escolha! Você optou pelo pagamento **à vista** com 40% de desconto.\n\n💰 **Valor: ${formatCurrency(opcaoSelecionada.valorTotal)}**\n\nEssa é a melhor economia! Você está pronto para fechar o acordo?`;
-    } else if (msgLower === "2" || msgLower.includes("6x") || msgLower.includes("6 x") || msgLower.includes("seis")) {
-      opcaoSelecionada = opcoes[1];
-      respostaBot = `Ótima escolha! Você optou por **6 parcelas** com 20% de desconto.\n\n💳 **6x de ${formatCurrency(opcaoSelecionada.valorParcela)}**\n💰 **Total: ${formatCurrency(opcaoSelecionada.valorTotal)}**\n\nVocê está pronto para fechar o acordo?`;
-    } else if (msgLower === "3" || msgLower.includes("12x") || msgLower.includes("12 x") || msgLower.includes("doze")) {
-      opcaoSelecionada = opcoes[2];
-      respostaBot = `Entendido! Você optou por **12 parcelas**.\n\n💳 **12x de ${formatCurrency(opcaoSelecionada.valorParcela)}**\n💰 **Total: ${formatCurrency(opcaoSelecionada.valorTotal)}**\n\nVocê está pronto para fechar o acordo?`;
+    // Verificar selecao por numero
+    const numEscolhido = parseInt(msgLower);
+    if (!isNaN(numEscolhido) && numEscolhido >= 1 && numEscolhido <= opcoes.length) {
+      opcaoSelecionada = opcoes[numEscolhido - 1];
+    }
+
+    // Verificar selecao por texto
+    if (!opcaoSelecionada) {
+      if (msgLower.includes("vista") || msgLower.includes("a vista")) {
+        opcaoSelecionada = opcoes[0]; // A vista e sempre a primeira
+      } else {
+        // Verificar se menciona numero de parcelas
+        for (const op of opcoes) {
+          if (op.parcelas > 1) {
+            const parcelasStr = `${op.parcelas}x`;
+            const parcelasStr2 = `${op.parcelas} x`;
+            if (msgLower.includes(parcelasStr) || msgLower.includes(parcelasStr2)) {
+              opcaoSelecionada = op;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (opcaoSelecionada) {
+      if (opcaoSelecionada.parcelas === 1) {
+        respostaBot = `Excelente escolha! Voce optou pelo pagamento **a vista** com ${opcaoSelecionada.desconto}% de desconto.\n\n\uD83D\uDCB0 **Valor: ${formatCurrency(opcaoSelecionada.valorTotal)}**\n\nEssa e a melhor economia! Voce esta pronto para fechar o acordo?`;
+      } else {
+        const entradaInfo = opcaoSelecionada.entrada
+          ? `\n\uD83D\uDCB3 **Entrada: ${formatCurrency(opcaoSelecionada.entrada)}**\n\uD83D\uDCB3 **${opcaoSelecionada.parcelas - 1}x de ${formatCurrency(opcaoSelecionada.valorParcela)}**`
+          : `\n\uD83D\uDCB3 **${opcaoSelecionada.parcelas}x de ${formatCurrency(opcaoSelecionada.valorParcela)}**`;
+        respostaBot = `Otima escolha! Voce optou por **${opcaoSelecionada.parcelas} parcelas** com ${opcaoSelecionada.desconto}% de desconto.${entradaInfo}\n\uD83D\uDCB0 **Total: ${formatCurrency(opcaoSelecionada.valorTotal)}**\n\nVoce esta pronto para fechar o acordo?`;
+      }
     } else if (msgLower.includes("desconto") || msgLower.includes("menor") || msgLower.includes("melhor")) {
-      respostaBot = `A melhor opção em termos de economia é o **pagamento à vista** com 40% de desconto! Você pagaria apenas ${formatCurrency(opcoes[0].valorTotal)} em vez de ${formatCurrency(divida.valor_atualizado)}.\n\nDeseja escolher essa opção? Digite "1" para confirmar.`;
+      respostaBot = `A melhor opcao em termos de economia e o **pagamento a vista** com ${opcoes[0].desconto}% de desconto! Voce pagaria apenas ${formatCurrency(opcoes[0].valorTotal)} em vez de ${formatCurrency(divida.valor_atualizado)}.\n\nDeseja escolher essa opcao? Digite "1" para confirmar.`;
     } else if (msgLower.includes("parcela") || msgLower.includes("dividir")) {
-      respostaBot = `Temos duas opções de parcelamento:\n\n📌 **6x de ${formatCurrency(opcoes[1].valorParcela)}** - com 20% de desconto (total: ${formatCurrency(opcoes[1].valorTotal)})\n\n📌 **12x de ${formatCurrency(opcoes[2].valorParcela)}** - sem desconto (total: ${formatCurrency(opcoes[2].valorTotal)})\n\nQual prefere? Digite "2" para 6x ou "3" para 12x.`;
+      const opParceladas = opcoes.filter((o) => o.parcelas > 1);
+      if (opParceladas.length > 0) {
+        const lista = opParceladas.map((op) => {
+          const entradaInfo = op.entrada ? ` (entrada ${formatCurrency(op.entrada)})` : "";
+          return `\uD83D\uDCCC **${op.parcelas}x de ${formatCurrency(op.valorParcela)}** - ${op.desconto}% de desconto (total: ${formatCurrency(op.valorTotal)})${entradaInfo}`;
+        }).join("\n\n");
+        respostaBot = `Temos opcoes de parcelamento:\n\n${lista}\n\nQual prefere? Digite o numero da opcao.`;
+      } else {
+        respostaBot = `No momento so temos a opcao de pagamento a vista com ${opcoes[0].desconto}% de desconto: ${formatCurrency(opcoes[0].valorTotal)}.`;
+      }
     } else if (msgLower.includes("sim") || msgLower.includes("fechar") || msgLower.includes("confirmar") || msgLower.includes("aceito")) {
       if (opcaoEscolhida) {
-        respostaBot = `Perfeito! Clique no botão abaixo para finalizar seu acordo.`;
+        respostaBot = `Perfeito! Clique no botao abaixo para finalizar seu acordo.`;
         setMostrarBotaoFechar(true);
       } else {
-        respostaBot = `Primeiro escolha uma das opções de pagamento:\n\n1️⃣ À Vista (40% desconto)\n2️⃣ 6x (20% desconto)\n3️⃣ 12x (sem desconto)\n\nDigite o número da opção desejada.`;
+        const listaOpcoes = opcoes.map((op, i) => formatarOpcaoTexto(op, i)).join("\n");
+        respostaBot = `Primeiro escolha uma das opcoes de pagamento:\n\n${listaOpcoes}\n\nDigite o numero da opcao desejada.`;
       }
     } else {
-      respostaBot = `Desculpe, não entendi. Por favor, escolha uma das opções:\n\n1️⃣ À Vista - ${formatCurrency(opcoes[0].valorTotal)} (40% off)\n2️⃣ 6x de ${formatCurrency(opcoes[1].valorParcela)} (20% off)\n3️⃣ 12x de ${formatCurrency(opcoes[2].valorParcela)}\n\nDigite 1, 2 ou 3 para escolher.`;
+      const listaOpcoes = opcoes.map((op, i) => formatarOpcaoTexto(op, i)).join("\n");
+      respostaBot = `Desculpe, nao entendi. Por favor, escolha uma das opcoes:\n\n${listaOpcoes}\n\nDigite ${opcoes.map((_, i) => i + 1).join(", ")} para escolher.`;
     }
 
     if (opcaoSelecionada) {
@@ -222,7 +384,7 @@ export default function NegociarPage() {
     setIsClosingDeal(true);
 
     try {
-      // Se não temos negociacaoId, criar agora
+      // Se nao temos negociacaoId, criar agora
       let negId = negociacaoId;
       if (!negId) {
         const negRes = await fetch("/api/public/negociacao", {
@@ -298,7 +460,7 @@ export default function NegociarPage() {
       <Header />
 
       <main className="flex-1 bg-gray-100 flex flex-col">
-        {/* Resumo da dívida */}
+        {/* Resumo da divida */}
         <div className="bg-white border-b shadow-sm">
           <div className="container mx-auto px-4 py-4">
             <div className="max-w-2xl mx-auto">
@@ -310,7 +472,7 @@ export default function NegociarPage() {
                   <p className="text-sm text-muted-foreground">{divida.produto}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm text-muted-foreground">Valor da dívida</p>
+                  <p className="text-sm text-muted-foreground">Valor da divida</p>
                   <p className="text-xl font-bold text-red-600">
                     {formatCurrency(divida.valor_atualizado)}
                   </p>
@@ -320,13 +482,13 @@ export default function NegociarPage() {
           </div>
         </div>
 
-        {/* Área do chat */}
+        {/* Area do chat */}
         <div className="flex-1 container mx-auto px-4 py-4 flex flex-col max-w-2xl">
           <Card className="flex-1 flex flex-col overflow-hidden">
             <CardHeader className="bg-primary text-white py-3 px-4">
               <CardTitle className="text-base font-medium flex items-center gap-2">
                 <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
-                Assistente de Negociação
+                {configCredor.nome_assistente || "Assistente de Negociacao"}
               </CardTitle>
             </CardHeader>
 
@@ -371,7 +533,7 @@ export default function NegociarPage() {
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Botão de fechar acordo */}
+              {/* Botao de fechar acordo */}
               {mostrarBotaoFechar && opcaoEscolhida && (
                 <div className="p-4 bg-green-50 border-t border-green-200">
                   <Button

@@ -26,7 +26,7 @@ export async function GET(
       .from("dividas")
       .select(`
         *,
-        credor:credores(id, nome, cnpj, email)
+        credor:credores(id, nome, cnpj, email, config_negociacao)
       `)
       .eq("id", id)
       .single();
