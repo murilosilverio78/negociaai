@@ -17,6 +17,7 @@ export interface Column<T> {
   label: string;
   sortable?: boolean;
   render?: (item: T) => React.ReactNode;
+  header?: () => React.ReactNode;
 }
 
 interface DataTableProps<T> {
@@ -49,7 +50,9 @@ export function DataTable<T extends Record<string, unknown>>({
           <TableRow>
             {columns.map((col) => (
               <TableHead key={col.key}>
-                {col.sortable && onSort ? (
+                {col.header ? (
+                  col.header()
+                ) : col.sortable && onSort ? (
                   <Button
                     variant="ghost"
                     size="sm"

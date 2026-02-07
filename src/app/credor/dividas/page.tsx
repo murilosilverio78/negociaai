@@ -24,7 +24,9 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Trash2, Search } from "lucide-react";
+import { toast } from "sonner";
 
 interface DividaRow {
   id: string;
@@ -61,6 +63,9 @@ export default function DividasPage() {
   const [status, setStatus] = useState("");
   const [sortKey, setSortKey] = useState("created_at");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -83,10 +88,62 @@ export default function DividasPage() {
     fetchData();
   }, [fetchData]);
 
+  // Clear selection when page, filters, or sort change
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [page, pageSize, search, status, sortKey, sortDir]);
+
   async function handleDelete(id: string) {
     await fetch(`/api/credor/dividas/${id}`, { method: "DELETE" });
     fetchData();
   }
+
+  async function handleBulkDelete() {
+    setBulkDeleting(true);
+    try {
+      const res = await fetch("/api/credor/dividas", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: Array.from(selectedIds) }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success(`${json.count} dívida(s) excluída(s) com sucesso.`);
+        setSelectedIds(new Set());
+        fetchData();
+      } else {
+        toast.error(json.error || "Erro ao excluir dívidas.");
+      }
+    } catch {
+      toast.error("Erro ao excluir dívidas.");
+    } finally {
+      setBulkDeleting(false);
+      setBulkDialogOpen(false);
+    }
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (data.length > 0 && data.every((d) => selectedIds.has(d.id))) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(data.map((d) => d.id)));
+    }
+  }
+
+  const allSelected = data.length > 0 && data.every((d) => selectedIds.has(d.id));
+  const someSelected = data.some((d) => selectedIds.has(d.id)) && !allSelected;
 
   function handleSort(key: string) {
     if (sortKey === key) {
@@ -98,6 +155,24 @@ export default function DividasPage() {
   }
 
   const columns: Column<DividaRow>[] = [
+    {
+      key: "select",
+      label: "",
+      render: (item) => (
+        <Checkbox
+          checked={selectedIds.has(item.id)}
+          onCheckedChange={() => toggleSelect(item.id)}
+          aria-label={`Selecionar dívida ${item.id}`}
+        />
+      ),
+      header: () => (
+        <Checkbox
+          checked={allSelected ? true : someSelected ? "indeterminate" : false}
+          onCheckedChange={toggleSelectAll}
+          aria-label="Selecionar todas"
+        />
+      ),
+    },
     {
       key: "cpf",
       label: "CPF",
@@ -204,6 +279,47 @@ export default function DividasPage() {
           </SelectContent>
         </Select>
       </div>
+
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 rounded-lg border bg-muted/50 px-4 py-3">
+          <span className="text-sm font-medium">
+            {selectedIds.size} dívida(s) selecionada(s)
+          </span>
+          <AlertDialog open={bulkDialogOpen} onOpenChange={setBulkDialogOpen}>
+            <AlertDialogTrigger asChild>
+              <Button variant="destructive" size="sm">
+                <Trash2 className="mr-2 h-4 w-4" />
+                Excluir ({selectedIds.size})
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Excluir {selectedIds.size} dívida(s)?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Essa ação irá remover {selectedIds.size} dívida(s) da listagem. Essa ação não pode ser desfeita.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={bulkDeleting}>Cancelar</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleBulkDelete}
+                  className="bg-red-600 hover:bg-red-700"
+                  disabled={bulkDeleting}
+                >
+                  {bulkDeleting ? "Excluindo..." : "Excluir"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSelectedIds(new Set())}
+          >
+            Limpar seleção
+          </Button>
+        </div>
+      )}
 
       <DataTable
         columns={columns}
