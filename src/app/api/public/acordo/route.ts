@@ -51,6 +51,7 @@ export async function POST(request: NextRequest) {
       valor_acordo,
       desconto_percentual,
       numero_parcelas,
+      valor_entrada,
       valor_parcela,
       opcao_escolhida,
     } = body;
@@ -71,6 +72,7 @@ export async function POST(request: NextRequest) {
         valor_acordo,
         desconto_percentual,
         numero_parcelas,
+        valor_entrada: valor_entrada || 0,
         valor_parcela,
         opcao_escolhida,
         status: "ativo",
@@ -86,13 +88,40 @@ export async function POST(request: NextRequest) {
     // 2. Gerar parcelas
     const parcelas = [];
     const hoje = new Date();
-    for (let i = 0; i < numero_parcelas; i++) {
-      const dataVencimento = new Date(hoje);
-      dataVencimento.setDate(dataVencimento.getDate() + 10 + i * 30);
+    const entradaValor = Number(valor_entrada) || 0;
+
+    if (entradaValor > 0) {
+      // Parcela 1: entrada (vencimento em 3 dias)
+      const dataEntrada = new Date(hoje);
+      dataEntrada.setDate(dataEntrada.getDate() + 3);
       parcelas.push({
         acordo_id: acordo.id,
-        numero: i + 1,
-        valor: valor_parcela,
+        numero: 1,
+        valor: entradaValor,
+        data_vencimento: dataEntrada.toISOString().split("T")[0],
+        status: "pendente",
+      });
+
+      // Parcelas restantes (a partir do número 2, vencimento 30/60/90... dias)
+      for (let i = 0; i < numero_parcelas; i++) {
+        const dataVencimento = new Date(hoje);
+        dataVencimento.setDate(dataVencimento.getDate() + 30 + i * 30);
+        parcelas.push({
+          acordo_id: acordo.id,
+          numero: i + 2,
+          valor: valor_parcela,
+          data_vencimento: dataVencimento.toISOString().split("T")[0],
+          status: "pendente",
+        });
+      }
+    } else {
+      // À vista: parcela única com valor total do acordo
+      const dataVencimento = new Date(hoje);
+      dataVencimento.setDate(dataVencimento.getDate() + 3);
+      parcelas.push({
+        acordo_id: acordo.id,
+        numero: 1,
+        valor: valor_acordo,
         data_vencimento: dataVencimento.toISOString().split("T")[0],
         status: "pendente",
       });
@@ -103,10 +132,14 @@ export async function POST(request: NextRequest) {
       console.error("Erro ao criar parcelas:", parcelasError);
     }
 
-    // 3. Atualizar negociação
+    // 3. Atualizar negociação com acordo_id, opcao_escolhida e status
     const { error: negError } = await supabase
       .from("negociacoes")
-      .update({ status: "acordo_fechado" })
+      .update({
+        status: "acordo_fechado",
+        acordo_id: acordo.id,
+        opcao_escolhida,
+      })
       .eq("id", negociacao_id);
 
     if (negError) {

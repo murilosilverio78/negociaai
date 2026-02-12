@@ -166,6 +166,14 @@ export default function AcordoPage() {
               )}
 
               <div className="border-t pt-4 grid grid-cols-2 gap-4">
+                {acordo.valor_entrada > 0 && (
+                  <div>
+                    <p className="text-sm text-muted-foreground">Entrada</p>
+                    <p className="text-lg font-semibold">
+                      {formatCurrency(acordo.valor_entrada)}
+                    </p>
+                  </div>
+                )}
                 <div>
                   <p className="text-sm text-muted-foreground">Parcelas</p>
                   <p className="text-lg font-semibold">

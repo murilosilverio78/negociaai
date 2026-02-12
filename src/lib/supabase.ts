@@ -45,10 +45,14 @@ export interface Mensagem {
 export interface Negociacao {
   id: string;
   divida_id: string;
-  status: "em_andamento" | "acordo_fechado" | "cancelada";
-  mensagens: Mensagem[];
+  valor_original: number;
+  valor_atualizado: number;
+  dias_atraso: number;
+  faixa_atraso: string;
+  opcoes_acordo: Record<string, unknown>;
   opcao_escolhida?: string;
-  valor_acordo?: number;
+  acordo_id?: string;
+  status: "ativa" | "em_andamento" | "acordo_fechado" | "cancelada" | "abandonada";
   created_at: string;
   updated_at: string;
 }
@@ -61,6 +65,7 @@ export interface Acordo {
   valor_acordo: number;
   desconto_percentual: number;
   numero_parcelas: number;
+  valor_entrada: number;
   valor_parcela: number;
   opcao_escolhida: string;
   status: "ativo" | "pago" | "cancelado";
